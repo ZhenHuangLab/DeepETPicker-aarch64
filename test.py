@@ -61,7 +61,18 @@ def test_func(args, stdout=None):
                     def forward(self, x):
                         return self.model(x)
 
+                    def on_test_epoch_start(self):
+                        # pytorch-lightning >= 2.0 no longer passes step outputs to the
+                        # epoch hook, so they are accumulated manually here.
+                        self._test_outputs = []
+
                     def test_step(self, test_batch, batch_idx):
+                        out = self._test_step_impl(test_batch, batch_idx)
+                        if out is not None:
+                            self._test_outputs.append(out)
+                        return out
+
+                    def _test_step_impl(self, test_batch, batch_idx):
                         with torch.no_grad():
                             img, label, index = test_batch
                             index = torch.cat([i.view(1, -1) for i in index], dim=0).permute(1, 0)
@@ -79,10 +90,12 @@ def test_func(args, stdout=None):
                                     return self._nms_v2(seg_output[:, :], kernel=args.meanPool_kernel,
                                                         mp_num=mp_num, positions=index)
 
-                    def test_step_end(self, outputs):
-                        return outputs
-
-                    def test_epoch_end(self, epoch_output):
+                    def on_test_epoch_end(self):
+                        # pytorch-lightning >= 2.0: renamed from test_epoch_end;
+                        # test_step_end no longer exists.
+                        epoch_output = self._test_outputs
+                        if not epoch_output:
+                            return
                         with torch.no_grad():
                             if args.meanPool_NMS:
                                 coords_out = torch.cat(epoch_output, dim=0).detach().cpu().numpy()
@@ -192,12 +205,19 @@ def test_func(args, stdout=None):
                             return torch.zeros([0, 5]).cuda()
 
                 # load trained checkpoints to model
-                model = UNetTest.load_from_checkpoint(args.checkpoints)
+                # torch >= 2.6 defaults torch.load to weights_only=True, which
+                # rejects the argparse.Namespace stored in the checkpoint's
+                # hyper_parameters. These checkpoints are produced locally by
+                # train.py, so full unpickling is safe here.
+                model = UNetTest.load_from_checkpoint(args.checkpoints, weights_only=False)
 
                 # model = UNetTest().model
                 model.eval()
-                runner = Trainer(gpus=args.gpu_id, #
-                                 accelerator='dp'
+                # pytorch-lightning >= 2.0: gpus -> accelerator/devices, 'dp' -> strategy
+                _gpu_ids = args.gpu_id if isinstance(args.gpu_id, (list, tuple)) else [args.gpu_id]
+                runner = Trainer(accelerator='gpu',
+                                 devices=list(_gpu_ids),
+                                 strategy='auto',
                                  )
                 os.makedirs(f'result/{dataset}/{model_name}/', exist_ok=True)
 

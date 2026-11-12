@@ -5,9 +5,18 @@ from skimage.measure import regionprops
 from skimage.morphology import dilation
 from scipy.spatial import distance
 from pycm import ConfusionMatrix
-from pycm.pycm_output import table_print, stat_print
-from pycm.pycm_param import SUMMARY_CLASS, SUMMARY_OVERALL
-import scikitplot as skplt
+try:  # pycm >= 4 renamed pycm_output/pycm_param to output/params
+    from pycm.output import table_print, stat_print
+    from pycm.params import SUMMARY_CLASS, SUMMARY_OVERALL
+except ImportError:  # pycm 3.x
+    from pycm.pycm_output import table_print, stat_print
+    from pycm.pycm_param import SUMMARY_CLASS, SUMMARY_OVERALL
+try:  # scikit-plot 0.3.7 is unmaintained and imports `scipy.interp`,
+    # removed in SciPy >= 1.12. It is only used for one optional
+    # multi-class confusion-matrix figure.
+    import scikitplot as skplt
+except ImportError:
+    skplt = None
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
@@ -402,12 +411,13 @@ def cal_metrics_MultiCls(pred, gt, occupancy_map, cfg, args, pad_size, dir_name,
         confusion_matrix.relabel(num2pdb_v1)
 
         lut_classes = np.asarray(classes)
-        skplt.metrics.plot_confusion_matrix(lut_classes[gt_particle_classes],
-                                            lut_classes[predicted_particle_classes],
-                                            labels=cfg["classes_sort"],
-                                            figsize=(20, 20), text_fontsize=18, hide_zeros=True,
-                                            hide_counts=False)
-        plt.savefig(f'{save_dir}/{dir_name}/loc_cls//plain_cm_padsize{pad_size}_segThresh{args.threshold}.png')
+        if skplt is not None:
+            skplt.metrics.plot_confusion_matrix(lut_classes[gt_particle_classes],
+                                                lut_classes[predicted_particle_classes],
+                                                labels=cfg["classes_sort"],
+                                                figsize=(20, 20), text_fontsize=18, hide_zeros=True,
+                                                hide_counts=False)
+            plt.savefig(f'{save_dir}/{dir_name}/loc_cls//plain_cm_padsize{pad_size}_segThresh{args.threshold}.png')
 
         # Prepare confusion matrix prints
         confusion_matrix_table = table_print(confusion_matrix.classes, confusion_matrix.table)

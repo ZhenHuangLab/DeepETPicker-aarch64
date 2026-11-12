@@ -88,7 +88,18 @@ class UNetExperiment(pl.LightningModule):
         self.log('train_loss', loss_seg, on_step=False, on_epoch=True)
         return loss_seg
 
+    def on_validation_epoch_start(self):
+        # pytorch-lightning >= 2.0 no longer passes step outputs to the epoch hook,
+        # so they are accumulated manually here.
+        self._val_outputs = []
+
     def validation_step(self, val_batch, batch_idx):
+        out = self._validation_step_impl(val_batch, batch_idx)
+        if out is not None:
+            self._val_outputs.append(out)
+        return out
+
+    def _validation_step_impl(self, val_batch, batch_idx):
         args = self.args
         with torch.no_grad():
             img, label, index = val_batch
@@ -157,13 +168,13 @@ class UNetExperiment(pl.LightningModule):
             else:
                 return self._nms_v2(self.seg_output[:, :], kernel=args.meanPool_kernel, mp_num=6, positions=index)
 
-    def validation_step_end(self, outputs):
+    def on_validation_epoch_end(self):
+        # pytorch-lightning >= 2.0: renamed from validation_epoch_end, outputs
+        # come from the buffer filled by validation_step (validation_step_end is gone).
+        epoch_output = self._val_outputs
         args = self.args
-        if 'test' in args.test_mode:
-            return outputs
-
-    def validation_epoch_end(self, epoch_output):
-        args = self.args
+        if not epoch_output:
+            return
         with torch.no_grad():
             if 'test' in args.test_mode:
                 if args.meanPool_NMS:
@@ -349,21 +360,23 @@ def train_func(args, stdout=None):
                                           name=logger_name)
     lr_monitor = LearningRateMonitor(logging_interval='step')
 
+    # pytorch-lightning >= 2.0: gpus -> accelerator/devices, checkpoint_callback -> callbacks,
+    # accelerator='dp' -> strategy, profiler=True -> 'simple', resume_from_checkpoint -> fit(ckpt_path=)
+    gpu_ids = args.gpu_id if isinstance(args.gpu_id, (list, tuple)) else [args.gpu_id]
     runner = Trainer(min_epochs=min(50, args.max_epoch),
                      max_epochs=args.max_epoch,
                      logger=tb_logger,
-                     gpus=args.gpu_id,
-                     checkpoint_callback=checkpoint_callback,
-                     callbacks=[lr_monitor],
-                     accelerator='dp',
+                     accelerator='gpu',
+                     devices=list(gpu_ids),
+                     callbacks=[checkpoint_callback, lr_monitor],
+                     strategy='ddp' if len(gpu_ids) > 1 else 'auto',
                      precision=32,
-                     profiler=True,
-                     sync_batchnorm=True,
-                     resume_from_checkpoint=args.checkpoints)
+                     profiler='simple',
+                     sync_batchnorm=len(gpu_ids) > 1)
 
 
     try:
-        runner.fit(model)
+        runner.fit(model, ckpt_path=args.checkpoints if args.checkpoints else None)
         print('*' * 100)
         print('Training Finished')
         print(f'Training pid:{os.getpid()}')
@@ -373,11 +386,16 @@ def train_func(args, stdout=None):
             sys.stderr = save_stderr
             sys.stdout = save_stdout
         return os.getpid()
-    except:
+    except Exception:
+        # The original bare `except:` swallowed the traceback entirely, so any
+        # failure looked like a silent success (exit code 0, no message).
+        import traceback
+        traceback.print_exc()
         torch.cuda.empty_cache()
         if stdout is not None:
             stdout.flush()
-            stdout.write('Training Exception!')
+            stdout.write('Training Exception!\n')
+            stdout.write(traceback.format_exc())
             sys.stderr = save_stderr
             sys.stdout = save_stdout
         return os.getpid()

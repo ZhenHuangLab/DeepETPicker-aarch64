@@ -297,7 +297,12 @@ class ExtResNetBlock(nn.Module):
         out = self.conv2(out)
         out = self.conv3(out)
 
-        out += residual
+        # `out` is the output of a ReLU (SingleConv ends with one) and ReLU's
+        # backward needs that output, so an in-place add bumps its version
+        # counter and modern autograd raises
+        #   "one of the variables needed for gradient computation has been
+        #    modified by an inplace operation ... output 0 of Relu"
+        out = out + residual
         out = self.non_linearity(out)
         return out
 
@@ -321,7 +326,12 @@ class ExtResNetBlock_att(nn.Module):
         out = self.conv2(out)
         out = self.conv3(out)
 
-        out += residual
+        # `out` is the output of a ReLU (SingleConv ends with one) and ReLU's
+        # backward needs that output, so an in-place add bumps its version
+        # counter and modern autograd raises
+        #   "one of the variables needed for gradient computation has been
+        #    modified by an inplace operation ... output 0 of Relu"
+        out = out + residual
         out = self.non_linearity(out)
         return out
 
@@ -360,7 +370,12 @@ class ExtResNetBlock_lightWeight(nn.Module):
         out = self.conv2(out)
         out = self.conv3(out)
 
-        out += residual
+        # `out` is the output of a ReLU (SingleConv ends with one) and ReLU's
+        # backward needs that output, so an in-place add bumps its version
+        # counter and modern autograd raises
+        #   "one of the variables needed for gradient computation has been
+        #    modified by an inplace operation ... output 0 of Relu"
+        out = out + residual
         out = self.non_linearity(out)
         return out
 
